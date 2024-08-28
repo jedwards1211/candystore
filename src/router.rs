@@ -396,52 +396,6 @@ impl ShardRouter {
         Ok(())
     }
 
-    fn compact_shard(&self, write_offset: u64) -> Result<()> {
-        let mut guard = self.node.write();
-        let ShardNode::Leaf(sh) = &*guard else {
-            // was split
-            return Ok(());
-        };
-        if sh.get_write_offset() < write_offset {
-            // already compacted
-            return Ok(());
-        };
-
-        let t0 = Instant::now();
-        let orig_filename = self
-            .config
-            .dir_path
-            .join(format!("shard_{:04x}-{:04x}", sh.span.start, sh.span.end));
-        let tmpfile = self
-            .config
-            .dir_path
-            .join(format!("compact_{:04x}-{:04x}", sh.span.start, sh.span.end));
-
-        let mut compacted_shard = Shard::open(
-            tmpfile.clone(),
-            sh.span.clone(),
-            true,
-            self.config.clone(),
-            self.stats.clone(),
-        )?;
-
-        // XXX: this can be done in a background thread, holding a read lock until we're done, and then wrap it
-        // all up under a write lock
-        sh.compact_into(&mut compacted_shard)?;
-
-        std::fs::rename(tmpfile, orig_filename)?;
-
-        self.stats.report_compaction(
-            t0,
-            sh.get_write_offset(),
-            compacted_shard.get_write_offset(),
-        );
-
-        *guard = ShardNode::Leaf(compacted_shard);
-
-        Ok(())
-    }
-
     pub(crate) fn insert(
         &self,
         ph: PartedHash,
@@ -464,10 +418,6 @@ impl ShardRouter {
             match res {
                 InsertStatus::SplitNeeded => {
                     self.split_shard()?;
-                    // retry
-                }
-                InsertStatus::CompactionNeeded(write_offset) => {
-                    self.compact_shard(write_offset)?;
                     // retry
                 }
                 _ => {

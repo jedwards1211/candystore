@@ -60,40 +60,33 @@ pub use stats::Stats;
 pub use store::{CandyStore, GetOrCreateStatus, ReplaceStatus, SetStatus};
 pub use typed::{CandyTypedDeque, CandyTypedKey, CandyTypedList, CandyTypedStore};
 
-use std::fmt::{Display, Formatter};
+use std::{
+    fmt::{Display, Formatter},
+    ops::Range,
+};
 
 #[cfg(feature = "whitebox_testing")]
 pub use hashing::HASH_BITS_TO_KEEP;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum CandyError {
-    WrongHashSeedLength,
     KeyTooLong(usize),
     ValueTooLong(usize),
     EntryCannotFitInShard(usize, usize),
-    KeyNotFound,
-    KeyAlreadyExists(Vec<u8>, u64),
-    CompactionFailed(String),
-    SplitFailed(String),
-    LoadingFailed(String),
+    KeyAlreadyExists(Range<u32>, Vec<u8>, u64),
 }
 
 impl Display for CandyError {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match self {
-            Self::WrongHashSeedLength => write!(f, "wrong hash seed length"),
             Self::KeyTooLong(sz) => write!(f, "key too long {sz}"),
-            Self::KeyNotFound => write!(f, "key not found"),
             Self::ValueTooLong(sz) => write!(f, "value too long {sz}"),
-            Self::KeyAlreadyExists(key, ph) => {
-                write!(f, "key {key:?} already exists (0x{ph:016x})")
+            Self::KeyAlreadyExists(sp, key, ph) => {
+                write!(f, "key {key:?} already exists (0x{ph:016x}) span={sp:?}")
             }
             Self::EntryCannotFitInShard(sz, max) => {
                 write!(f, "entry too big ({sz}) for a single shard file ({max})")
             }
-            Self::CompactionFailed(s) => write!(f, "shard compaction failed: {s}"),
-            Self::LoadingFailed(s) => write!(f, "loading store failed: {s}"),
-            Self::SplitFailed(s) => write!(f, "shard split failed: {s}"),
         }
     }
 }

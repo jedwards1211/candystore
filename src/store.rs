@@ -1,4 +1,4 @@
-use anyhow::{anyhow, bail};
+use anyhow::{bail, ensure};
 use fslock::LockFile;
 use parking_lot::Mutex;
 use std::{
@@ -322,27 +322,23 @@ impl CandyStore {
     ) -> Result<InsertStatus> {
         let ph = PartedHash::new(&self.config.hash_seed, full_key);
 
-        if full_key.len() > MAX_TOTAL_KEY_SIZE as usize {
-            return Err(anyhow!(CandyError::KeyTooLong(full_key.len())));
-        }
-        if val.len() > MAX_VALUE_SIZE as usize {
-            return Err(anyhow!(CandyError::ValueTooLong(val.len())));
-        }
-        if full_key.len() + val.len() > self.config.max_shard_size as usize {
-            return Err(anyhow!(CandyError::EntryCannotFitInShard(
+        ensure!(
+            full_key.len() <= MAX_TOTAL_KEY_SIZE as usize,
+            CandyError::KeyTooLong(full_key.len())
+        );
+        ensure!(
+            val.len() <= MAX_VALUE_SIZE as usize,
+            CandyError::ValueTooLong(val.len())
+        );
+        ensure!(
+            full_key.len() + val.len() <= self.config.max_shard_size as usize,
+            CandyError::EntryCannotFitInShard(
                 full_key.len() + val.len(),
                 self.config.max_shard_size as usize
-            )));
-        }
+            )
+        );
 
-        loop {
-            let status = self.root.insert(ph, full_key, val, mode)?;
-
-            match status {
-                InsertStatus::CompactionNeeded(_) | InsertStatus::SplitNeeded => unreachable!(),
-                _ => return Ok(status),
-            }
-        }
+        self.root.insert(ph, full_key, val, mode)
     }
 
     pub(crate) fn set_raw(&self, full_key: &[u8], val: &[u8]) -> Result<SetStatus> {
@@ -351,7 +347,6 @@ impl CandyStore {
             InsertStatus::Replaced(v) => Ok(SetStatus::PrevValue(v)),
             InsertStatus::AlreadyExists(v) => Ok(SetStatus::PrevValue(v)),
             InsertStatus::KeyDoesNotExist => unreachable!(),
-            InsertStatus::CompactionNeeded(_) => unreachable!(),
             InsertStatus::SplitNeeded => unreachable!(),
         }
     }
@@ -388,7 +383,6 @@ impl CandyStore {
             InsertStatus::Replaced(v) => Ok(ReplaceStatus::PrevValue(v)),
             InsertStatus::AlreadyExists(v) => Ok(ReplaceStatus::WrongValue(v)),
             InsertStatus::KeyDoesNotExist => Ok(ReplaceStatus::DoesNotExist),
-            InsertStatus::CompactionNeeded(_) => unreachable!(),
             InsertStatus::SplitNeeded => unreachable!(),
         }
     }
@@ -431,7 +425,6 @@ impl CandyStore {
             InsertStatus::AlreadyExists(v) => Ok(GetOrCreateStatus::ExistingValue(v)),
             InsertStatus::Replaced(_) => unreachable!(),
             InsertStatus::KeyDoesNotExist => unreachable!(),
-            InsertStatus::CompactionNeeded(_) => unreachable!(),
             InsertStatus::SplitNeeded => unreachable!(),
         }
     }
@@ -473,8 +466,19 @@ impl CandyStore {
         CandyStoreIterator::from_cookie(self, cookie, false)
     }
 
+    pub fn wait_for_compaction(&self) -> Result<()> {
+        self.root
+            .call_on_all_shards(|sh| sh.wait_for_compaction())?;
+        Ok(())
+    }
+
     /// Returns useful stats about the store
     pub fn stats(&self) -> Stats {
+        if cfg!(test) {
+            println!("waiting...");
+            self.wait_for_compaction().unwrap();
+        }
+
         let occupied_and_wasted_bytes = self
             .root
             .call_on_all_shards(|sh| {

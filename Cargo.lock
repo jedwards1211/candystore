@@ -78,7 +78,6 @@ dependencies = [
  "databuf",
  "fslock",
  "libc",
- "memmap",
  "parking_lot",
  "rand",
  "simd-itertools",
